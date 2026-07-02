@@ -4,15 +4,17 @@ set -e
 DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}')
 GW_IP=$(ip route show default | awk '/default/ {print $3}')
 PROXY_IP=${PROXY_IP:-$GW_IP}
-GOST_MARK=255
+GOST_MARK=240
+GOST_TABLE_ID=240
 
 echo "[INFO] Using Interface: $DEFAULT_IF"
 echo "[INFO] Gateway IP: $GW_IP"
 echo "[INFO] Target Proxy: socks5://$PROXY_IP:$PROXY_PORT"
 
-# --- 1. Policy Routing (For Inbound Traffic) ---
 echo "[INFO] Setting up iptables and iproute2..."
 mkdir -p /etc/iproute2
+
+# --- 1. Policy Routing (For Inbound Traffic) ---
 if ! grep -q "$TABLE_ID inbound_table" /etc/iproute2/rt_tables 2>/dev/null; then
   echo "$TABLE_ID inbound_table" >> /etc/iproute2/rt_tables
 fi
@@ -21,8 +23,12 @@ iptables -t mangle -A PREROUTING -i $DEFAULT_IF -m conntrack --ctstate NEW -j CO
 iptables -t mangle -A OUTPUT -m connmark --mark $MARK_ID -j CONNMARK --restore-mark
 ip rule add fwmark $MARK_ID table $TABLE_ID
 
-# --- 2. Protect Gost's Own Traffic (Anti-Loop) ---
-ip rule add fwmark $GOST_MARK lookup main pref 10
+# --- 2. Protect Gost's Own Traffic (Anti-Loop V2) ---
+if ! grep -q "$GOST_TABLE_ID gost_table" /etc/iproute2/rt_tables 2>/dev/null; then
+  echo "$GOST_TABLE_ID gost_table" >> /etc/iproute2/rt_tables
+fi
+ip route add default via $GW_IP dev $DEFAULT_IF table $GOST_TABLE_ID
+ip rule add fwmark $GOST_MARK lookup $GOST_TABLE_ID pref 10
 
 # --- 3. Watchdog & Route Enforcer (For Outbound Traffic) ---
 (
@@ -34,12 +40,10 @@ ip rule add fwmark $GOST_MARK lookup main pref 10
       sleep 2
       kill -9 1
     fi
-
     if ip link show tun0 > /dev/null 2>&1; then
       ip route add 0.0.0.0/1 dev tun0 2>/dev/null || true
       ip route add 128.0.0.0/1 dev tun0 2>/dev/null || true
     fi
-
     sleep 5
   done
 ) &
