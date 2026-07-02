@@ -11,9 +11,9 @@ MARK_ID=${MARK_ID:-100}
 TABLE_ID=${TABLE_ID:-200}
 RULE_PREF_INBOUND=${RULE_PREF_INBOUND:-50}   # must be lower than main (32766)
 
-GOST_MARK=${GOST_MARK:-255}
-GOST_TABLE_ID=${GOST_TABLE_ID:-220}          # never 0/253/254/255, kernel-reserved
-RULE_PREF_GOST=${RULE_PREF_GOST:-10}         # must be lower than RULE_PREF_INBOUND
+PROXY_MARK=${PROXY_MARK:-255}
+PROXY_TABLE_ID=${PROXY_TABLE_ID:-220}        # never 0/253/254/255, kernel-reserved
+RULE_PREF_PROXY=${RULE_PREF_PROXY:-10}       # must be lower than RULE_PREF_INBOUND
 
 # private ranges that must stay on the normal gateway path, never through the proxy
 EXCLUDE_CIDRS=${EXCLUDE_CIDRS:-"10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"}
@@ -21,7 +21,7 @@ EXCLUDE_CIDRS=${EXCLUDE_CIDRS:-"10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"}
 echo "[INFO] iface=$DEFAULT_IF gw=$GW_IP proxy=socks5://$PROXY_IP:$PROXY_PORT"
 
 # --- reject reserved kernel table IDs (unspec/default/main/local) ---
-for t in "$TABLE_ID" "$GOST_TABLE_ID"; do
+for t in "$TABLE_ID" "$PROXY_TABLE_ID"; do
   case "$t" in
     0|253|254|255)
       echo "[FATAL] table id $t is reserved by the kernel. pick 1-252." >&2
@@ -39,16 +39,16 @@ done
 mkdir -p /etc/iproute2
 grep -q "^${TABLE_ID}[[:space:]]inbound_table$" /etc/iproute2/rt_tables 2>/dev/null \
   || echo "$TABLE_ID inbound_table" >> /etc/iproute2/rt_tables
-grep -q "^${GOST_TABLE_ID}[[:space:]]gost_table$" /etc/iproute2/rt_tables 2>/dev/null \
-  || echo "$GOST_TABLE_ID gost_table" >> /etc/iproute2/rt_tables
+grep -q "^${PROXY_TABLE_ID}[[:space:]]proxy_table$" /etc/iproute2/rt_tables 2>/dev/null \
+  || echo "$PROXY_TABLE_ID proxy_table" >> /etc/iproute2/rt_tables
 
 # --- inbound_table: return path for externally-initiated connections ---
 ip route replace default via "$GW_IP" dev "$DEFAULT_IF" table "$TABLE_ID"
 
-# --- gost_table: gost's own egress to the SOCKS5 server, bypasses tun0 ---
+# --- proxy_table: tun2socks's own egress to the SOCKS5 server, bypasses tun0 ---
 SUBNET=$(ip route show dev "$DEFAULT_IF" scope link | awk '!/default/ {print $1; exit}')
-[ -n "$SUBNET" ] && ip route replace "$SUBNET" dev "$DEFAULT_IF" table "$GOST_TABLE_ID"
-ip route replace default via "$GW_IP" dev "$DEFAULT_IF" table "$GOST_TABLE_ID"
+[ -n "$SUBNET" ] && ip route replace "$SUBNET" dev "$DEFAULT_IF" table "$PROXY_TABLE_ID"
+ip route replace default via "$GW_IP" dev "$DEFAULT_IF" table "$PROXY_TABLE_ID"
 
 # --- keep private ranges off the tunnel: more specific than the tun0 /1 split-default,
 #     so longest-prefix-match always sends them out the normal gateway instead ---
@@ -62,23 +62,29 @@ iptables -t mangle -A PREROUTING -i "$DEFAULT_IF" -m conntrack --ctstate NEW -j 
 iptables -t mangle -A OUTPUT -m connmark --mark "$MARK_ID" -j CONNMARK --restore-mark
 
 # --- ip rule: explicit priority is required, do not rely on the default ---
-ip rule del pref "$RULE_PREF_GOST"     2>/dev/null || true
+ip rule del pref "$RULE_PREF_PROXY"    2>/dev/null || true
 ip rule del pref "$RULE_PREF_INBOUND"  2>/dev/null || true
-ip rule add pref "$RULE_PREF_GOST"    fwmark "$GOST_MARK" lookup "$GOST_TABLE_ID"
-ip rule add pref "$RULE_PREF_INBOUND" fwmark "$MARK_ID"   lookup "$TABLE_ID"
+ip rule add pref "$RULE_PREF_PROXY"    fwmark "$PROXY_MARK" lookup "$PROXY_TABLE_ID"
+ip rule add pref "$RULE_PREF_INBOUND"  fwmark "$MARK_ID"   lookup "$TABLE_ID"
 
 echo "[INFO] ip rule table:"
 ip rule list
 
-# --- start gost tun tunnel in the background so the watchdog can supervise it ---
-echo "[INFO] starting gost tun tunnel..."
-gost -D -L "tun://?net=${TUN_IP}&route=0.0.0.0/0" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}" &
-GOST_PID=$!
+# --- setup tun interface for tun2socks ---
+echo "[INFO] configuring tun0 interface..."
+ip tuntap add mode tun dev tun0
+ip addr add "${TUN_IP}" dev tun0
+ip link set dev tun0 up
 
-# --- watchdog: keep tun0 default routes in place, exit if gost or the iface dies ---
+# --- start tun2socks in the background so the watchdog can supervise it ---
+echo "[INFO] starting tun2socks..."
+tun2socks -device tun0 -proxy "socks5://${PROXY_IP}:${PROXY_PORT}" -fwmark "${PROXY_MARK}" &
+PROXY_PID=$!
+
+# --- watchdog: keep tun0 default routes in place, exit if tun2socks or the iface dies ---
 while true; do
-  if ! kill -0 "$GOST_PID" 2>/dev/null; then
-    echo "[ERROR] gost process died, exiting"
+  if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+    echo "[ERROR] tun2socks process died, exiting"
     exit 1
   fi
   if ! ip link show "$DEFAULT_IF" > /dev/null 2>&1; then
