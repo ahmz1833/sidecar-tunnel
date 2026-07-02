@@ -15,6 +15,9 @@ GOST_MARK=${GOST_MARK:-255}
 GOST_TABLE_ID=${GOST_TABLE_ID:-220}          # never 0/253/254/255, kernel-reserved
 RULE_PREF_GOST=${RULE_PREF_GOST:-10}         # must be lower than RULE_PREF_INBOUND
 
+# private ranges that must stay on the normal gateway path, never through the proxy
+EXCLUDE_CIDRS=${EXCLUDE_CIDRS:-"10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"}
+
 echo "[INFO] iface=$DEFAULT_IF gw=$GW_IP proxy=socks5://$PROXY_IP:$PROXY_PORT"
 
 # --- reject reserved kernel table IDs (unspec/default/main/local) ---
@@ -47,6 +50,12 @@ SUBNET=$(ip route show dev "$DEFAULT_IF" scope link | awk '!/default/ {print $1;
 [ -n "$SUBNET" ] && ip route replace "$SUBNET" dev "$DEFAULT_IF" table "$GOST_TABLE_ID"
 ip route replace default via "$GW_IP" dev "$DEFAULT_IF" table "$GOST_TABLE_ID"
 
+# --- keep private ranges off the tunnel: more specific than the tun0 /1 split-default,
+#     so longest-prefix-match always sends them out the normal gateway instead ---
+for cidr in $EXCLUDE_CIDRS; do
+  ip route replace "$cidr" via "$GW_IP" dev "$DEFAULT_IF"
+done
+
 # --- mark inbound NEW connections, restore mark on their reply packets ---
 iptables -t mangle -F
 iptables -t mangle -A PREROUTING -i "$DEFAULT_IF" -m conntrack --ctstate NEW -j CONNMARK --set-mark "$MARK_ID"
@@ -63,7 +72,7 @@ ip rule list
 
 # --- start gost tun tunnel in the background so the watchdog can supervise it ---
 echo "[INFO] starting gost tun tunnel..."
-gost -D -L "tun://?net=${TUN_IP}" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}" &
+gost -D -L "tun://?net=${TUN_IP}&route=0.0.0.0/0" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}" &
 GOST_PID=$!
 
 # --- watchdog: keep tun0 default routes in place, exit if gost or the iface dies ---
