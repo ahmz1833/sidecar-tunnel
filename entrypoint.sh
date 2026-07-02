@@ -48,13 +48,14 @@ ip rule list
 
 # --- setup tun interface for tun2socks ---
 echo "[INFO] configuring tun0 interface..."
+ip link delete tun0 2>/dev/null || true
 ip tuntap add mode tun dev tun0
 ip addr add "${TUN_IP}" dev tun0
 ip link set dev tun0 up
 
 # --- start tun2socks ---
 echo "[INFO] starting tun2socks..."
-tun2socks -device tun0 -proxy "socks5://${PROXY_IP}:${PROXY_PORT}" &
+tun2socks -device tun0 -proxy "socks5://${PROXY_IP}:${PROXY_PORT}" -loglevel debug &
 PROXY_PID=$!
 
 # --- watchdog ---
