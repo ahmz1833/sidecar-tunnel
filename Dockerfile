@@ -1,4 +1,5 @@
-FROM gogost/gost:3.2
+FROM xjasonlyu/tun2socks:v2.5.2 AS tun2socks-bin
+FROM alpine:latest
 
 ENV PROXY_PORT=2080
 ENV TUN_IP="169.254.254.1/30"
@@ -8,12 +9,12 @@ ENV MARK_ID=100
 ENV TABLE_ID=200
 ENV RULE_PREF_INBOUND=50
 
-# gost's own egress to the SOCKS5 server (fwmark -> table), must bypass tun0
-ENV GOST_MARK=255
-ENV GOST_TABLE_ID=220
-ENV RULE_PREF_GOST=10
-# GOST_TABLE_ID/TABLE_ID must stay in 1-252; 0/253/254/255 are kernel-reserved
-# RULE_PREF_GOST must stay lower than RULE_PREF_INBOUND, both lower than 32766
+# tun2socks's own egress to the SOCKS5 server (fwmark -> table), must bypass tun0
+ENV PROXY_MARK=255
+ENV PROXY_TABLE_ID=220
+ENV RULE_PREF_PROXY=10
+# PROXY_TABLE_ID/TABLE_ID must stay in 1-252; 0/253/254/255 are kernel-reserved
+# RULE_PREF_PROXY must stay lower than RULE_PREF_INBOUND, both lower than 32766
 
 # private ranges routed via the normal gateway instead of the proxy
 ENV EXCLUDE_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
@@ -28,6 +29,9 @@ RUN apk add --no-cache \
     bind-tools \
     curl \
   && rm -rf /var/cache/apk/*
+
+COPY --from=tun2socks-bin /tun2socks /usr/local/bin/tun2socks
+RUN chmod +x /usr/local/bin/tun2socks
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
