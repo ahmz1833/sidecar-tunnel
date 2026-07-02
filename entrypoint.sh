@@ -4,6 +4,7 @@ set -e
 DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}')
 GW_IP=$(ip route show default | awk '/default/ {print $3}')
 PROXY_IP=${PROXY_IP:-$GW_IP}
+GOST_MARK=255
 
 echo "[INFO] Using Interface: $DEFAULT_IF"
 echo "[INFO] Gateway IP: $GW_IP"
@@ -20,7 +21,10 @@ iptables -t mangle -A PREROUTING -i $DEFAULT_IF -m conntrack --ctstate NEW -j CO
 iptables -t mangle -A OUTPUT -m connmark --mark $MARK_ID -j CONNMARK --restore-mark
 ip rule add fwmark $MARK_ID table $TABLE_ID
 
-# --- 2. Watchdog & Route Enforcer (For Outbound Traffic) ---
+# --- 2. Protect Gost's Own Traffic (Anti-Loop) ---
+ip rule add fwmark $GOST_MARK lookup main pref 10
+
+# --- 3. Watchdog & Route Enforcer (For Outbound Traffic) ---
 (
   echo "[INFO] Watchdog & Route Manager started..."
   while true; do
@@ -30,14 +34,16 @@ ip rule add fwmark $MARK_ID table $TABLE_ID
       sleep 2
       kill -9 1
     fi
+
     if ip link show tun0 > /dev/null 2>&1; then
       ip route add 0.0.0.0/1 dev tun0 2>/dev/null || true
       ip route add 128.0.0.0/1 dev tun0 2>/dev/null || true
     fi
+
     sleep 5
   done
 ) &
 
-# --- 3. Start the Tunnel ---
+# --- 4. Start the Tunnel ---
 echo "[INFO] Starting Gost v3 Transparent Tunnel..."
-exec gost -L "tun://?net=${TUN_IP}" -F "socks5://${PROXY_IP}:${PROXY_PORT}"
+exec gost -L "tun://?net=${TUN_IP}" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}"
