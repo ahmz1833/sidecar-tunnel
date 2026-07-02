@@ -36,7 +36,7 @@ done
 
 # --- mark inbound NEW connections, restore mark on their reply packets ---
 iptables -t mangle -F
-iptables -t mangle -A PREROUTING -i "$DEFAULT_IF" -m conntrack --ctstate NEW -j CONNMARK --set-mark "$MARK_ID"
+iptables -t mangle -A PREROUTING -i "$DEFAULT_IF" -m addrtype ! --src-type LOCAL -m conntrack --ctstate NEW -j CONNMARK --set-mark "$MARK_ID"
 iptables -t mangle -A OUTPUT -m connmark --mark "$MARK_ID" -j CONNMARK --restore-mark
 
 # --- ip rule: setup return path for marked packets ---
@@ -52,7 +52,7 @@ ip tuntap add mode tun dev tun0
 ip addr add "${TUN_IP}" dev tun0
 ip link set dev tun0 up
 
-# --- start tun2socks (No fwmark needed! Native routing handles it) ---
+# --- start tun2socks ---
 echo "[INFO] starting tun2socks..."
 tun2socks -device tun0 -proxy "socks5://${PROXY_IP}:${PROXY_PORT}" &
 PROXY_PID=$!
