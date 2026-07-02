@@ -9,13 +9,20 @@ echo "[INFO] Using Interface: $DEFAULT_IF"
 echo "[INFO] Gateway IP: $GW_IP"
 echo "[INFO] Target Proxy: socks5://$PROXY_IP:$PROXY_PORT"
 
-echo "$TABLE_ID inbound_table" >> /etc/iproute2/rt_tables
+# --- 1. Policy Routing Setup ---
+echo "[INFO] Setting up iptables and iproute2..."
+mkdir -p /etc/iproute2
+if ! grep -q "$TABLE_ID inbound_table" /etc/iproute2/rt_tables 2>/dev/null; then
+  echo "$TABLE_ID inbound_table" >> /etc/iproute2/rt_tables
+fi
+
 ip route add default via $GW_IP table $TABLE_ID
 
 iptables -t mangle -A PREROUTING -i $DEFAULT_IF -m conntrack --ctstate NEW -j CONNMARK --set-mark $MARK_ID
 iptables -t mangle -A OUTPUT -m connmark --mark $MARK_ID -j CONNMARK --restore-mark
 ip rule add fwmark $MARK_ID table $TABLE_ID
 
+# --- 2. The Watchdog ---
 (
   echo "[INFO] Watchdog started on interface $DEFAULT_IF..."
   while true; do
@@ -29,5 +36,6 @@ ip rule add fwmark $MARK_ID table $TABLE_ID
   done
 ) &
 
+# --- 3. Start the Tunnel ---
 echo "[INFO] Starting Gost v3 Transparent Tunnel..."
 exec gost -L "tun://?net=${TUN_IP}&route=0.0.0.0/0" -F "socks5://${PROXY_IP}:${PROXY_PORT}"
