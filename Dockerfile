@@ -30,7 +30,7 @@ RUN apk add --no-cache \
     curl \
   && rm -rf /var/cache/apk/*
 
-COPY --from=tun2socks-bin /tun2socks /usr/local/bin/tun2socks
+COPY --from=tun2socks-bin /usr/bin/tun2socks /usr/local/bin/tun2socks
 RUN chmod +x /usr/local/bin/tun2socks
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
