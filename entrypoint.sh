@@ -61,22 +61,24 @@ ip rule add pref "$RULE_PREF_INBOUND" fwmark "$MARK_ID"   lookup "$TABLE_ID"
 echo "[INFO] ip rule table:"
 ip rule list
 
-# --- watchdog: keep tun0 default routes in place, crash sidecar on iface loss ---
-(
-  echo "[INFO] watchdog started"
-  while true; do
-    if ! ip link show "$DEFAULT_IF" > /dev/null 2>&1; then
-      echo "[ERROR] $DEFAULT_IF lost, crashing sidecar"
-      kill -TERM 1; sleep 2; kill -KILL 1
-    fi
-    if ip link show tun0 > /dev/null 2>&1; then
-      ip route replace 0.0.0.0/1   dev tun0 2>/dev/null || true
-      ip route replace 128.0.0.0/1 dev tun0 2>/dev/null || true
-    fi
-    sleep 5
-  done
-) &
-
-# --- start gost tun tunnel ---
+# --- start gost tun tunnel in the background so the watchdog can supervise it ---
 echo "[INFO] starting gost tun tunnel..."
-exec gost -L "tun://?net=${TUN_IP}" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}"
+gost -D -L "tun://?net=${TUN_IP}" -F "socks5://${PROXY_IP}:${PROXY_PORT}?so_mark=${GOST_MARK}" &
+GOST_PID=$!
+
+# --- watchdog: keep tun0 default routes in place, exit if gost or the iface dies ---
+while true; do
+  if ! kill -0 "$GOST_PID" 2>/dev/null; then
+    echo "[ERROR] gost process died, exiting"
+    exit 1
+  fi
+  if ! ip link show "$DEFAULT_IF" > /dev/null 2>&1; then
+    echo "[ERROR] $DEFAULT_IF lost, exiting"
+    exit 1
+  fi
+  if ip link show tun0 > /dev/null 2>&1; then
+    ip route replace 0.0.0.0/1   dev tun0 2>/dev/null || true
+    ip route replace 128.0.0.0/1 dev tun0 2>/dev/null || true
+  fi
+  sleep 5
+done
