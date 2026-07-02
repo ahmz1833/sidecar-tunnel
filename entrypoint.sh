@@ -24,7 +24,6 @@ ip rule add fwmark $MARK_ID table $TABLE_ID
 (
   echo "[INFO] Watchdog & Route Manager started..."
   while true; do
-    # الف: بررسی زنده بودن کانتینر اصلی
     if ! ip link show $DEFAULT_IF > /dev/null 2>&1; then
       echo "[ERROR] Network interface $DEFAULT_IF lost! Crashing sidecar..."
       kill -15 1
