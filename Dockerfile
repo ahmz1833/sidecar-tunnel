@@ -15,6 +15,9 @@ ENV RULE_PREF_GOST=10
 # GOST_TABLE_ID/TABLE_ID must stay in 1-252; 0/253/254/255 are kernel-reserved
 # RULE_PREF_GOST must stay lower than RULE_PREF_INBOUND, both lower than 32766
 
+# private ranges routed via the normal gateway instead of the proxy
+ENV EXCLUDE_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
 # iproute2/iptables: required for policy routing
 # tcpdump: for debugging traffic on eth0/tun0 without shipping a separate debug image
 # bind-tools: dig/nslookup, useful for verifying DNS actually goes through the proxy
