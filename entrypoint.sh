@@ -21,6 +21,42 @@ if [ "$TABLE_ID" -eq 0 ] || [ "$TABLE_ID" -ge 253 ]; then
   exit 1
 fi
 
+cleanup() {
+  # Remove the EXIT trap to prevent double execution if called via INT or TERM
+  trap - EXIT
+  
+  echo "[INFO] Cleaning up network configurations..."
+  # Kill tun2socks if running
+  if [ -n "${PROXY_PID:-}" ]; then
+    kill "$PROXY_PID" 2>/dev/null || true
+  fi
+
+  # Delete tun0 and its routes
+  ip route del 0.0.0.0/1 dev tun0 2>/dev/null || true
+  ip route del 128.0.0.0/1 dev tun0 2>/dev/null || true
+  ip link delete tun0 2>/dev/null || true
+
+  # Remove ip rule
+  ip rule del pref "$RULE_PREF_INBOUND" 2>/dev/null || true
+
+  # Remove iptables rules
+  iptables -t mangle -D PREROUTING -i "$DEFAULT_IF" -m addrtype ! --src-type LOCAL -m conntrack --ctstate NEW -j CONNMARK --set-mark "$MARK_ID" 2>/dev/null || true
+  iptables -t mangle -D OUTPUT -m connmark --mark "$MARK_ID" -j CONNMARK --restore-mark 2>/dev/null || true
+
+  # Remove private range routes
+  for cidr in $EXCLUDE_CIDRS; do
+    ip route del "$cidr" via "$GW_IP" dev "$DEFAULT_IF" 2>/dev/null || true
+  done
+
+  # Remove inbound table route
+  ip route del default via "$GW_IP" dev "$DEFAULT_IF" table "$TABLE_ID" 2>/dev/null || true
+
+  echo "[INFO] Cleanup complete."
+  exit 0
+}
+
+trap cleanup EXIT INT TERM
+
 # --- rt_tables ---
 mkdir -p /etc/iproute2
 grep -q "^${TABLE_ID}[[:space:]]inbound_table$" /etc/iproute2/rt_tables 2>/dev/null \
